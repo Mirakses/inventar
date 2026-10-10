@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from db import ALL, NONE, IMAGE_EXT, Database
 
+__version__ = "0.1.0"
 APP_NAME = "Облік майна"
 STATUSES = ["В користуванні", "На складі", "У ремонті", "Позичено", "Списано"]
 
@@ -610,7 +611,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.db = db
         self.current_category = ALL
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(f"{APP_NAME} {__version__}")
         self.resize(1320, 800)
 
         # категорії
@@ -1214,6 +1215,7 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Inventar")
+    app.setApplicationVersion(__version__)
     app.setApplicationDisplayName(APP_NAME)
     app.setStyle("Fusion")
     app.setPalette(light_palette())
