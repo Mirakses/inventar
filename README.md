@@ -1,4 +1,6 @@
-# 📦 Облік майна
+<p align="center"><img src="assets/icon-128.png" width="128" alt="Іконка"></p>
+
+<h1 align="center">Облік майна</h1>
 
 Десктопна програма для обліку речей: категорії й підкатегорії, довільні характеристики, фото, пошук і сортування.
 Працює на **Windows, macOS і Linux** (Python + PySide6/Qt). Усі дані зберігаються локально в SQLite.
@@ -41,7 +43,8 @@ python app.py
 
 ```bash
 pip install pyinstaller
-pyinstaller --windowed --name Inventar app.py
+pyinstaller --windowed --name Inventar --icon assets/icon.icns --add-data "assets/icon.png:assets" app.py
+# Windows: --icon assets/icon.ico
 ```
 
 ## 💾 Де зберігаються дані
@@ -58,6 +61,7 @@ pyinstaller --windowed --name Inventar app.py
 
 ```
 app.py            інтерфейс (PySide6)
+assets/           іконка програми (SVG-джерело, .png, .ico, .icns)
 db.py             база даних SQLite і робота з фото
 .github/workflows автоматична збірка для Windows і macOS
 ```

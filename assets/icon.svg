@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#818CF8"/>
+      <stop offset="0.55" stop-color="#5B50E8"/>
+      <stop offset="1" stop-color="#3730A3"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="shadow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#1E1B4B" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#1E1B4B" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="badge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBBF24"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="100" y="100" width="824" height="824" rx="186"/>
+    </clipPath>
+  </defs>
+
+  <!-- фон (сітка іконок macOS: 824×824 з відступом 100) -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="460" fill="url(#shine)" clip-path="url(#squircle)"/>
+
+  <g transform="translate(-30,-12)">
+  <!-- тінь під коробкою -->
+  <ellipse cx="512" cy="760" rx="250" ry="56" fill="url(#shadow)"/>
+
+  <!-- коробка -->
+  <g stroke-linejoin="round">
+    <polygon points="312,400 512,500 512,740 312,640" fill="#E0E7FF"/>
+    <polygon points="512,500 712,400 712,640 512,740" fill="#C7D2FE"/>
+    <polygon points="512,300 712,400 512,500 312,400" fill="#FFFFFF"/>
+    <!-- скотч -->
+    <polygon points="396,358 428,342 628,442 596,458" fill="#A5B4FC"/>
+    <polygon points="596,458 628,442 628,682 596,698" fill="#818CF8"/>
+  </g>
+
+  </g>
+
+  <!-- значок «враховано» -->
+  <circle cx="716" cy="692" r="118" fill="url(#badge)" stroke="#FFFFFF" stroke-width="20"/>
+  <polyline points="662,694 701,733 772,656" fill="none" stroke="#FFFFFF" stroke-width="30"
+            stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

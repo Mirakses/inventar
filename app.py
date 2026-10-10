@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from db import ALL, NONE, IMAGE_EXT, Database
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 APP_NAME = "Облік майна"
 STATUSES = ["В користуванні", "На складі", "У ремонті", "Позичено", "Списано"]
 
@@ -160,6 +160,12 @@ def build_style():
         pm.save(str(f))
         paths[name] = f.as_posix()
     return STYLE.replace("@DOWN@", paths["down"]).replace("@UP@", paths["up"])
+
+
+def resource_path(rel):
+    """Шлях до файлу поруч із програмою — і з коду, і в зібраному .exe/.app (PyInstaller)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel)
 
 
 def light_palette():
@@ -1216,6 +1222,9 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Inventar")
     app.setApplicationVersion(__version__)
+    icon = resource_path(os.path.join("assets", "icon.png"))
+    if os.path.exists(icon):
+        app.setWindowIcon(QIcon(icon))
     app.setApplicationDisplayName(APP_NAME)
     app.setStyle("Fusion")
     app.setPalette(light_palette())
