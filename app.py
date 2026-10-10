@@ -1,7 +1,9 @@
 """Облік майна — десктопна програма (PySide6 / Qt). Запуск: python app.py"""
 import html
 import os
+import shutil
 import sys
+import zlib
 from pathlib import Path
 
 from PySide6.QtCore import (Qt, QItemSelectionModel, QRectF, QSize, QSortFilterProxyModel,
@@ -13,12 +15,15 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
     QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QSplitter, QStackedWidget, QStyle,
-    QStyledItemDelegate, QStyleOptionViewItem, QTableView, QTableWidget, QTableWidgetItem,
+    QStyledItemDelegate, QStyleOptionViewItem, QTableView, QToolButton, QTableWidget, QTableWidgetItem,
     QTabWidget, QTextBrowser, QToolBar, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from db import ALL, NONE, IMAGE_EXT, Database
+from db import ALL, FIELDS, NONE, IMAGE_EXT, Database
+from cloud import ROLES, Cloud, Offline, Rejected, friendly_error
+from ui_cloud import (ConnectDialog, LoginDialog, Perm, SyncController, UsersDialog,
+                      cloud_dir, history_html, load_config, save_config)
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 APP_NAME = "Облік майна"
 STATUSES = ["В користуванні", "На складі", "У ремонті", "Позичено", "Списано"]
 
@@ -102,6 +107,11 @@ QCalendarWidget QWidget { alternate-background-color: #F4F6FB; }
 QCalendarWidget QToolButton { color: #1F2937; background: transparent; padding: 4px 8px; }
 QPushButton#small { padding: 6px 8px; }
 
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled,
+QDateEdit:disabled, QPlainTextEdit[readOnly="true"] {
+    background: #F3F4F6; color: #6B7280; border-color: #E5E7EB; }
+QPushButton:disabled { color: #9CA3AF; background: #F9FAFB; border-color: #E5E7EB; }
+
 QPushButton { background: #FFFFFF; border: 1px solid #D1D5DB; border-radius: 9px;
               padding: 7px 14px; }
 QPushButton:hover { background: #EEF2FF; border-color: #A5B4FC; color: #3730A3; }
@@ -183,7 +193,7 @@ def light_palette():
 
 
 def cat_color(cat_id):
-    return CAT_COLORS[(cat_id or 0) % len(CAT_COLORS)]
+    return CAT_COLORS[zlib.crc32(str(cat_id or "").encode()) % len(CAT_COLORS)]
 
 
 def dot_icon(color, size=12):
@@ -351,14 +361,24 @@ def fill_category_combo(combo, db, with_none=True, none_text="— без кат�
 
 # ---------------------------------------------------------------- діалог речі
 class ItemDialog(QDialog):
-    def __init__(self, db, item_id=None, default_category=None, parent=None):
+    """mode: edit — усе; store — лише стан/розташування/кількість (комірник); view — перегляд.
+    allowed_cats: None — будь-яка категорія, інакше множина дозволених id.
+    history: функція item_id -> html (хмара) або None."""
+
+    def __init__(self, db, item_id=None, default_category=None, parent=None,
+                 mode="edit", allowed_cats=None, history=None):
         super().__init__(parent)
         self.db = db
         self.item_id = item_id
-        self.setWindowTitle("Нова річ" if item_id is None else "Редагування")
+        self.mode = mode
+        self.history = history
+        titles = {"edit": "Нова річ" if item_id is None else "Редагування",
+                  "store": "Видача / повернення", "view": "Перегляд"}
+        self.setWindowTitle(titles[mode])
         self.resize(720, 620)
 
         tabs = QTabWidget()
+        self.tabs = tabs
 
         # --- Основне
         main = QWidget()
@@ -370,6 +390,10 @@ class ItemDialog(QDialog):
         self.name.setStyleSheet("font-size: 16px; font-weight: 600; padding: 8px 10px;")
         self.category = QComboBox()
         fill_category_combo(self.category, db)
+        if allowed_cats is not None:
+            for i in reversed(range(self.category.count())):
+                if self.category.itemData(i) not in allowed_cats:
+                    self.category.removeItem(i)
         self.inventory_no = QLineEdit()
         self.inventory_no.setPlaceholderText("необов'язково")
         self.serial_no = QLineEdit()
@@ -432,12 +456,14 @@ class ItemDialog(QDialog):
         self.specs.verticalHeader().setDefaultSectionSize(36)
         self.specs.setAlternatingRowColors(True)
         sb = QHBoxLayout()
+        self.edit_buttons = []
         for text, slot in (("+ Рядок", self.add_spec_row), ("− Видалити", self.remove_spec_rows),
                            ("↑", lambda: self.move_spec(-1)), ("↓", lambda: self.move_spec(1)),
                            ("Підставити з категорії", self.fill_spec_keys)):
             b = QPushButton(text)
             b.clicked.connect(slot)
             sb.addWidget(b)
+            self.edit_buttons.append(b)
         sb.addStretch()
         sv.addWidget(self.specs)
         sv.addLayout(sb)
@@ -455,18 +481,30 @@ class ItemDialog(QDialog):
             b = QPushButton(text)
             b.clicked.connect(slot)
             pb.addWidget(b)
+            self.edit_buttons.append(b)
         pb.addStretch()
         hint = QLabel("💡 Перетягніть фото прямо сюди з Finder / Провідника. Перше фото — головне.")
         hint.setObjectName("hint")
+        self.photo_hint = hint
         pv.addWidget(hint)
         pv.addWidget(self.photos)
         pv.addLayout(pb)
         tabs.addTab(ph_w, "📷  Фото")
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Save).setText("💾  Зберегти")
-        buttons.button(QDialogButtonBox.Save).setObjectName("primary")
-        buttons.button(QDialogButtonBox.Cancel).setText("Скасувати")
+        if history and item_id is not None:
+            self.history_view = QTextBrowser()
+            self.history_view.document().setDocumentMargin(12)
+            self.history_tab = tabs.addTab(self.history_view, "🕘  Історія")
+            tabs.currentChanged.connect(self._maybe_load_history)
+
+        if mode == "view":
+            buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            buttons.button(QDialogButtonBox.Close).setText("Закрити")
+        else:
+            buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+            buttons.button(QDialogButtonBox.Save).setText("💾  Зберегти")
+            buttons.button(QDialogButtonBox.Save).setObjectName("primary")
+            buttons.button(QDialogButtonBox.Cancel).setText("Скасувати")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
@@ -480,6 +518,35 @@ class ItemDialog(QDialog):
             self.set_category(default_category if default_category not in (ALL, NONE) else None)
             self.fill_spec_keys()
         self.name.setFocus()
+
+        if mode != "edit":
+            locked = [self.name, self.category, self.inventory_no, self.serial_no, self.price,
+                      self.date, today_btn, clear_date, *self.edit_buttons]
+            if mode == "view":
+                locked += [self.location, self.quantity, self.status]
+            for w in locked:
+                w.setEnabled(False)
+            self.notes.setReadOnly(True)
+            self.specs.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.photos.setAcceptDrops(False)
+            self.photo_hint.hide()
+            if mode == "store":
+                banner = QLabel("📦  Режим комірника: можна змінити стан, розташування й кількість.")
+                banner.setStyleSheet("background:#FEF3C7; color:#92400E; padding:8px 10px; "
+                                     "border-radius:8px;")
+                lay.insertWidget(0, banner)
+                self.status.setFocus()
+
+    def _maybe_load_history(self, idx):
+        if idx == getattr(self, "history_tab", -1) and not getattr(self, "_history_loaded", False):
+            self._history_loaded = True
+            self.history_view.setHtml("<p style='color:#6B7280'>Завантаження…</p>")
+            QApplication.processEvents()
+            try:
+                self.history_view.setHtml(self.history(self.item_id))
+            except Exception as e:  # noqa: BLE001
+                self._history_loaded = False
+                self.history_view.setHtml(f"<p style='color:#B91C1C'>{html.escape(str(e))}</p>")
 
     # --- завантаження
     def set_category(self, cat_id):
@@ -582,6 +649,8 @@ class ItemDialog(QDialog):
 
     # --- збереження
     def accept(self):
+        if self.mode == "view":
+            return super().reject()
         name = self.name.text().strip()
         if not name:
             QMessageBox.warning(self, APP_NAME, "Вкажіть назву.")
@@ -600,8 +669,16 @@ class ItemDialog(QDialog):
             "notes": self.notes.toPlainText().strip() or None,
         }
         photos = [self.photos.item(i).data(Qt.UserRole) for i in range(self.photos.count())]
+        specs = self.current_specs()
+        if self.mode == "store":
+            # комірник змінює лише три поля — решту беремо як є з бази
+            item, old_specs, _ = self.db.get_item(self.item_id)
+            fields = {**{f: item[f] for f in FIELDS},
+                      "status": fields["status"], "location": fields["location"],
+                      "quantity": fields["quantity"]}
+            specs = [(x["key"], x["value"]) for x in old_specs]
         try:
-            self.item_id = self.db.save_item(self.item_id, fields, self.current_specs(), photos)
+            self.item_id = self.db.save_item(self.item_id, fields, specs, photos)
         except Exception as e:
             QMessageBox.critical(self, APP_NAME, f"Не вдалося зберегти:\n{e}")
             return
@@ -613,11 +690,16 @@ COLUMNS = ["", "Назва", "Категорія", "Інв. №", "Розташ�
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, db):
+    def __init__(self, db, cloud=None, base_dir=None):
         super().__init__()
         self.db = db
+        self.cloud = cloud
+        self.base_dir = Path(base_dir) if base_dir else db.data_dir
+        self.perm = Perm(cloud, db)
+        self.next_action = None      # "restart" — перезапустити сеанс (вхід/вихід/хмара)
+        self.sync = None
+        self._names = None
         self.current_category = ALL
-        self.setWindowTitle(f"{APP_NAME} {__version__}")
         self.resize(1320, 800)
 
         # категорії
@@ -632,9 +714,11 @@ class MainWindow(QMainWindow):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.category_menu)
         self.tree.currentItemChanged.connect(self.on_category_changed)
-        self.tree.itemDoubleClicked.connect(lambda *_: self.rename_category())
+        self.tree.itemDoubleClicked.connect(
+            lambda *_: self.perm.can_manage_categories and self.rename_category())
         add_cat = QPushButton("＋  Нова категорія")
         add_cat.clicked.connect(lambda: self.add_category(None))
+        self.add_cat_btn = add_cat
         cat_title = QLabel("Категорії")
         cat_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #6B7280; padding: 4px 6px;")
         left = QWidget()
@@ -677,8 +761,8 @@ class MainWindow(QMainWindow):
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
         hh.setMinimumSectionSize(40)
         self.table.setColumnWidth(0, 56)
-        for col, w in (("Категорія", 140), ("Інв. №", 80), ("Розташування", 130),
-                       ("К-сть", 56), ("Ціна", 96), ("Стан", 136), ("Куплено", 96)):
+        for col, w in (("Категорія", 120), ("Інв. №", 80), ("Розташування", 110),
+                       ("К-сть", 52), ("Ціна", 90), ("Стан", 128), ("Куплено", 90)):
             self.table.setColumnWidth(COLUMNS.index(col), w)
         # менш важливі колонки сховані; ПКМ по заголовку — показати/сховати
         for col in ("Інв. №", "Куплено"):
@@ -759,7 +843,7 @@ class MainWindow(QMainWindow):
         split.addWidget(left)
         split.addWidget(center)
         split.addWidget(right)
-        split.setSizes([220, 800, 320])
+        split.setSizes([210, 830, 300])
         split.setStretchFactor(1, 1)
         wrap = QWidget()
         wl = QVBoxLayout(wrap)
@@ -769,12 +853,188 @@ class MainWindow(QMainWindow):
 
         self.count_label = QLabel()
         self.total_label = QLabel()
+        self.sync_label = QLabel()
         self.statusBar().addWidget(self.count_label)
+        self.statusBar().addPermanentWidget(self.sync_label)
         self.statusBar().addPermanentWidget(self.total_label)
 
         self.build_toolbar()
+        self.apply_permissions()
         self.reload_categories()
         self.show_details()
+
+        if cloud is not None:
+            self.sync = SyncController(cloud, db.data_dir, self)
+            self.sync.state.connect(self.on_sync_state)
+            self.sync.synced.connect(self.on_synced)
+            self.sync.profile_changed.connect(self.on_profile_changed)
+            self.sync.kicked.connect(self.on_kicked)
+            self.sync.request(full=True)
+        else:
+            self.sync_label.setText("💻  Локальний режим")
+
+    # --- права й обліковий запис
+    def apply_permissions(self):
+        p = self.perm
+        title = f"{APP_NAME} {__version__}"
+        if self.cloud is not None:
+            prof = self.cloud.profile or {}
+            title += f" — {prof.get('full_name') or prof.get('email', '')} ({ROLES.get(p.role, p.role)})"
+        self.setWindowTitle(title)
+        self.add_cat_btn.setVisible(p.can_manage_categories)
+        self.a_add.setVisible(p.can_add)
+        self.empty_btn.setVisible(p.can_add)
+        self.account_btn.setText(self._account_text())
+        self.build_account_menu()
+        self.update_actions()
+
+    def _account_text(self):
+        if self.cloud is None:
+            return "💻  Локально"
+        prof = self.cloud.profile or {}
+        name = prof.get("full_name") or (prof.get("email") or "").split("@")[0]
+        return f"👤  {name} · {ROLES.get(self.perm.role, '')}"
+
+    def build_account_menu(self):
+        m = QMenu(self)
+        if self.cloud is None:
+            if load_config(self.base_dir):
+                m.addAction("☁️  Увійти в хмару", self.switch_to_cloud)
+            m.addAction("☁️  Підключити хмару…", self.connect_cloud)
+        else:
+            prof = self.cloud.profile or {}
+            head = m.addAction(f"{prof.get('email', '')}\nРоль: {ROLES.get(self.perm.role, '')}")
+            head.setEnabled(False)
+            m.addSeparator()
+            m.addAction("🔄  Синхронізувати зараз", lambda: self.sync and self.sync.request(full=True))
+            if self.perm.is_admin:
+                m.addAction("👥  Користувачі й доступ…", self.manage_users)
+                local = self.base_dir / "local.db"
+                if local.exists():
+                    m.addAction("⬆️  Перенести локальні дані в хмару…", self.import_local)
+            m.addSeparator()
+            m.addAction("☁️  Змінити сервер…", self.connect_cloud)
+            m.addAction("🚪  Вийти", self.logout)
+        self.account_btn.setMenu(m)
+
+    def update_actions(self):
+        ids = self.selected_ids() if hasattr(self, "table") else []
+        cats = [self._item_cat(i) for i in ids]
+        one = len(ids) == 1
+        mode = self.perm.item_mode(cats[0]) if one else None
+        self.a_edit.setEnabled(one)
+        self.a_edit.setText({"store": "📦  Видача / повернення", "view": "👁  Переглянути"}
+                            .get(mode, "✏️  Редагувати"))
+        self.a_dup.setEnabled(one and self.perm.can_add and mode == "edit")
+        self.a_del.setEnabled(bool(ids) and all(self.perm.can_edit(c) for c in cats))
+        self.a_dup.setVisible(self.perm.can_add)
+        self.a_del.setVisible(self.perm.can_add)
+
+    def _item_cat(self, item_id):
+        r = self.db.conn.execute("SELECT category_id FROM items WHERE id=?", (item_id,)).fetchone()
+        return r[0] if r else None
+
+    def changed(self):
+        """Локальні дані змінено — синхронізувати найближчим часом."""
+        if self.sync:
+            self.sync.request_soon()
+
+    # --- синхронізація
+    def on_sync_state(self, text, kind):
+        icon = {"ok": "☁️", "busy": "🔄", "offline": "📴", "error": "⚠️"}[kind]
+        color = {"ok": "#166534", "busy": "#4338CA", "offline": "#92400E", "error": "#B91C1C"}[kind]
+        self.sync_label.setText(f"<span style='color:{color}'>{icon}  {html.escape(text)}</span>")
+
+    def on_synced(self, st):
+        if st["pulled"] or st["rejected"] or st["photos"]:
+            _thumb_cache.clear()
+            self.reload_categories()
+        if st["rejected"]:
+            self.statusBar().showMessage(
+                f"⚠️  Сервер відхилив змін: {st['rejected']} (недостатньо прав) — їх скасовано.", 10000)
+
+    def on_profile_changed(self, profile, access):
+        self.cloud.cache_profile(self.db)
+        self.apply_permissions()
+        self.reload_categories()
+
+    def on_kicked(self, msg):
+        QMessageBox.warning(self, APP_NAME, msg)
+        self._logout(force=True)
+
+    def logout(self):
+        self._logout(force=False)
+
+    def _logout(self, force):
+        n = self.db.pending_count()
+        if n and not force and QMessageBox.question(
+                self, APP_NAME, f"Ще не відправлено змін: {n}. Після виходу вони пропадуть.\n"
+                                "Вийти все одно?") != QMessageBox.Yes:
+            return
+        if self.sync:
+            self.sync.stop()
+            self.sync = None
+        self.cloud.logout()
+        wipe_local_copy(self.db)
+        self.next_action = "restart"
+        self.close()
+
+    def switch_to_cloud(self):
+        global FORCE_LOCAL
+        FORCE_LOCAL = False
+        self.next_action = "restart"
+        self.close()
+
+    def connect_cloud(self):
+        cfg = load_config(self.base_dir) or {}
+        dlg = ConnectDialog(self, cfg.get("url", ""), cfg.get("key", ""))
+        if dlg.exec():
+            save_config(self.base_dir, *dlg.values())
+            if self.cloud is not None and self.sync:
+                self.sync.stop()
+                self.sync = None
+            self.switch_to_cloud()
+
+    def manage_users(self):
+        UsersDialog(self.cloud, self.db, self).exec()
+        self._names = None
+        if self.sync:
+            self.sync.request(full=True)
+
+    def import_local(self):
+        local = Database(self.base_dir)
+        try:
+            n_items = local.count_items(ALL)
+            if not n_items:
+                QMessageBox.information(self, APP_NAME, "У локальній базі немає речей.")
+                return
+            if QMessageBox.question(
+                    self, APP_NAME,
+                    f"Перенести в хмару локальні речі ({n_items}), категорії й фото?\n"
+                    "Локальна база залишиться без змін.") != QMessageBox.Yes:
+                return
+            n = self.db.import_from(local)
+        finally:
+            local.close()
+        self.reload_categories()
+        self.changed()
+        QMessageBox.information(self, APP_NAME, f"Додано речей: {n}. Вони відправляються на сервер.")
+
+    def history_for(self, item_id):
+        try:
+            if self._names is None:
+                self._names = {p["id"]: p.get("full_name") or p["email"]
+                               for p in self.cloud.list_profiles()}
+            rows = self.cloud.history(item_id)
+        except Exception as e:  # noqa: BLE001
+            return f"<p style='color:#B91C1C'>{html.escape(friendly_error(e))}</p>"
+        return history_html(rows, self._names, self.db.category_paths())
+
+    def closeEvent(self, e):
+        if self.sync:
+            self.sync.stop()
+            self.sync = None
+        super().closeEvent(e)
 
     # --- тулбар
     def build_toolbar(self):
@@ -796,12 +1056,13 @@ class MainWindow(QMainWindow):
                 w.setObjectName(name)
             return a
 
-        act("＋  Додати річ", self.add_item, "Ctrl+N", "Додати нову річ (Ctrl+N)", "primary")
+        self.a_add = act("＋  Додати річ", self.add_item, "Ctrl+N", "Додати нову річ (Ctrl+N)",
+                         "primary")
         tb.addSeparator()
-        act("✏️  Редагувати", self.edit_item, "Ctrl+E", "Редагувати вибрану річ (Ctrl+E)")
-        act("📄  Копія", self.duplicate_item, "Ctrl+D", "Створити копію (Ctrl+D)")
-        act("🗑  Видалити", self.delete_items, QKeySequence.Delete, "Видалити вибрані (Delete)",
-            "danger")
+        self.a_edit = act("✏️  Редагувати", self.edit_item, "Ctrl+E", "Відкрити вибрану річ (Ctrl+E)")
+        self.a_dup = act("📄  Копія", self.duplicate_item, "Ctrl+D", "Створити копію (Ctrl+D)")
+        self.a_del = act("🗑  Видалити", self.delete_items, QKeySequence.Delete,
+                         "Видалити вибрані (Delete)", "danger")
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
@@ -809,6 +1070,12 @@ class MainWindow(QMainWindow):
         act("💾  Резервна копія", self.backup, tip="Зберегти базу і всі фото в один ZIP")
         act("📁  Папка даних", lambda: QDesktopServices.openUrl(
             QUrl.fromLocalFile(str(self.db.data_dir))), tip="Відкрити папку з базою та фото")
+        tb.addSeparator()
+        self.account_btn = QToolButton()
+        self.account_btn.setPopupMode(QToolButton.InstantPopup)
+        self.account_btn.setCursor(Qt.PointingHandCursor)
+        self.account_btn.setObjectName("account")
+        tb.addWidget(self.account_btn)
         find = QAction(self)
         find.setShortcut(QKeySequence.Find)
         find.triggered.connect(lambda: (self.search.setFocus(), self.search.selectAll()))
@@ -865,6 +1132,8 @@ class MainWindow(QMainWindow):
             self.reload_items()
 
     def category_menu(self, pos):
+        if not self.perm.can_manage_categories:
+            return
         node = self.tree.itemAt(pos)
         if node:
             self.tree.setCurrentItem(node)
@@ -886,6 +1155,7 @@ class MainWindow(QMainWindow):
         if ok and name.strip():
             self.current_category = self.db.add_category(name, parent_id)
             self.reload_categories()
+            self.changed()
 
     def rename_category(self):
         cid = self.current_category
@@ -896,6 +1166,7 @@ class MainWindow(QMainWindow):
         if ok and name.strip():
             self.db.rename_category(cid, name)
             self.reload_categories()
+            self.changed()
 
     def move_category(self):
         cid = self.current_category
@@ -916,6 +1187,7 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.db.move_category(cid, combo.currentData())
             self.reload_categories()
+            self.changed()
 
     def delete_category(self):
         cid = self.current_category
@@ -929,6 +1201,7 @@ class MainWindow(QMainWindow):
             self.db.delete_category(cid)
             self.current_category = ALL
             self.reload_categories()
+            self.changed()
 
     # --- список речей
     def reload_items(self, *_):
@@ -1032,6 +1305,8 @@ class MainWindow(QMainWindow):
 
     # --- деталі
     def show_details(self, *_):
+        if hasattr(self, "a_edit"):
+            self.update_actions()
         ids = self.selected_ids()
         self.strip.clear()
         self.cover.clear()
@@ -1131,56 +1406,84 @@ class MainWindow(QMainWindow):
 
     def drop_photos_on_item(self, files):
         ids = self.selected_ids()
-        if len(ids) != 1:
+        if len(ids) != 1 or not self.perm.can_edit(self._item_cat(ids[0])):
             return
         item, specs, photos = self.db.get_item(ids[0])
-        from db import FIELDS
         self.db.save_item(ids[0], {f: item[f] for f in FIELDS},
                           [(s["key"], s["value"]) for s in specs],
                           [dict(p) for p in photos] + [{"source": f} for f in files])
         self.reload_items()
+        self.changed()
 
     # --- дії з речами
     def item_menu(self, pos):
-        if not self.selected_ids():
+        ids = self.selected_ids()
+        if not ids:
             return
+        cats = [self._item_cat(i) for i in ids]
+        can_edit = all(self.perm.can_edit(c) for c in cats)
         m = QMenu(self)
-        m.addAction("Редагувати", self.edit_item)
-        m.addAction("Створити копію", self.duplicate_item)
-        m.addAction("Перемістити в категорію…", self.move_items)
-        m.addSeparator()
-        m.addAction("Видалити", self.delete_items)
+        m.addAction(self.a_edit.text().strip(), self.edit_item).setEnabled(len(ids) == 1)
+        if can_edit:
+            m.addAction("Створити копію", self.duplicate_item).setEnabled(len(ids) == 1)
+            m.addAction("Перемістити в категорію…", self.move_items)
+            m.addSeparator()
+            m.addAction("Видалити", self.delete_items)
         m.exec(self.table.viewport().mapToGlobal(pos))
 
+    def _allowed_cats(self):
+        allowed = self.perm.editable_categories()
+        return None if allowed is None else allowed
+
     def add_item(self):
-        dlg = ItemDialog(self.db, None, self.current_category, self)
+        if not self.perm.can_add:
+            return
+        allowed = self._allowed_cats()
+        if allowed is not None and not allowed:
+            QMessageBox.information(self, APP_NAME, "У вас немає категорій, куди можна додавати речі. "
+                                                    "Зверніться до адміністратора.")
+            return
+        dlg = ItemDialog(self.db, None, self.current_category, self, allowed_cats=allowed)
         if dlg.exec():
             self.reload_categories()
             self.select_id(dlg.item_id)
+            self.changed()
 
     def edit_item(self):
         ids = self.selected_ids()
         if len(ids) != 1:
             return
-        dlg = ItemDialog(self.db, ids[0], parent=self)
-        if dlg.exec():
+        mode = self.perm.item_mode(self._item_cat(ids[0]))
+        dlg = ItemDialog(self.db, ids[0], parent=self, mode=mode,
+                         allowed_cats=self._allowed_cats() if mode == "edit" else None,
+                         history=self.history_for if self.cloud is not None else None)
+        if dlg.exec() and mode != "view":
             _thumb_cache.clear()
             self.reload_categories()
             self.select_id(dlg.item_id)
+            self.changed()
 
     def duplicate_item(self):
         ids = self.selected_ids()
-        if len(ids) == 1:
+        if len(ids) == 1 and self.perm.can_add and self.perm.can_edit(self._item_cat(ids[0])):
             new_id = self.db.duplicate_item(ids[0])
             self.reload_categories()
             self.select_id(new_id)
+            self.changed()
 
     def move_items(self):
         ids = self.selected_ids()
+        if not ids or not all(self.perm.can_edit(self._item_cat(i)) for i in ids):
+            return
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Перемістити ({len(ids)})")
         combo = QComboBox()
         fill_category_combo(combo, self.db)
+        allowed = self._allowed_cats()
+        if allowed is not None:
+            for i in reversed(range(combo.count())):
+                if combo.itemData(i) not in allowed:
+                    combo.removeItem(i)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(dlg.accept)
         bb.rejected.connect(dlg.reject)
@@ -1190,16 +1493,18 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.db.move_items(ids, combo.currentData())
             self.reload_categories()
+            self.changed()
 
     def delete_items(self):
         ids = self.selected_ids()
-        if not ids:
+        if not ids or not all(self.perm.can_edit(self._item_cat(i)) for i in ids):
             return
         if QMessageBox.question(self, APP_NAME, f"Видалити вибрані речі ({len(ids)}) разом з фото?"
                                 ) == QMessageBox.Yes:
             for i in ids:
                 self.db.delete_item(i)
             self.reload_categories()
+            self.changed()
 
     # --- експорт
     def export_csv(self):
@@ -1218,6 +1523,91 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Резервну копію збережено → {path}", 5000)
 
 
+FORCE_LOCAL = False   # «Працювати без хмари» на цей запуск
+
+
+def wipe_local_copy(db):
+    """Стирає офлайн-копію хмари (після виходу або входу іншого користувача)."""
+    with db.conn:
+        for t in ("categories", "items", "photos", "meta"):
+            db.conn.execute(f"DELETE FROM {t}")
+    shutil.rmtree(db.photos_dir, ignore_errors=True)
+    db.photos_dir.mkdir(parents=True, exist_ok=True)
+
+
+def start_cloud(cloud, db):
+    """Вхід у хмару. Повертає 'ok', 'local' або 'quit'."""
+    while True:
+        try:
+            ok = cloud.restore()
+        except Offline:
+            if cloud.load_cached_profile(db):
+                return "ok"      # працюємо з локальною копією, синхронізуємо пізніше
+            r = QMessageBox.question(
+                None, APP_NAME, "Немає зв'язку з сервером, а на цьому комп'ютері ви ще не входили.\n\n"
+                                "Працювати локально (без хмари)?")
+            return "local" if r == QMessageBox.Yes else "quit"
+        if not ok:
+            dlg = LoginDialog(cloud)
+            r = dlg.exec()
+            if r == LoginDialog.LOCAL:
+                return "local"
+            if r != QDialog.Accepted:
+                return "quit"
+        try:
+            cloud.load_profile()
+        except Offline:
+            if cloud.load_cached_profile(db):
+                return "ok"
+            QMessageBox.warning(None, APP_NAME, "Зв'язок із сервером втрачено. Спробуйте ще раз.")
+            continue
+        except Rejected:
+            QMessageBox.warning(None, APP_NAME, "Обліковий запис вимкнено або не знайдено. "
+                                                "Зверніться до адміністратора.")
+            cloud.logout()
+            continue
+        if db.meta_get("owner") not in (None, cloud.user_id):
+            wipe_local_copy(db)       # на цьому комп'ютері входить інший користувач
+        db.meta_set("owner", cloud.user_id)
+        cloud.cache_profile(db)
+        return "ok"
+
+
+def run_session(app, base):
+    """Один сеанс: вибір режиму → головне вікно. Повертає 'restart' або None."""
+    global FORCE_LOCAL
+    cloud = None
+    cfg = None if FORCE_LOCAL else load_config(base)
+    if cfg:
+        try:
+            cloud = Cloud(cfg["url"], cfg["key"], cloud_dir(base, cfg["url"]))
+        except ImportError:
+            QMessageBox.warning(None, APP_NAME, "Не встановлено бібліотеку supabase "
+                                                "(pip install supabase). Запуск у локальному режимі.")
+            cloud = None
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(None, APP_NAME, f"Не вдалося підключитися до хмари:\n{e}\n\n"
+                                                "Запуск у локальному режимі.")
+            cloud = None
+    if cloud is not None:
+        db = Database(cloud.data_dir, "data.db")
+        res = start_cloud(cloud, db)
+        if res == "quit":
+            db.close()
+            return None
+        if res == "local":
+            db.close()
+            cloud = None
+            FORCE_LOCAL = True
+    if cloud is None:
+        db = Database(base)
+    w = MainWindow(db, cloud, base_dir=base)
+    w.show()
+    app.exec()
+    db.close()
+    return w.next_action
+
+
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Inventar")
@@ -1229,14 +1619,12 @@ def main():
     app.setStyle("Fusion")
     app.setPalette(light_palette())
     app.setStyleSheet(build_style())
-    data_dir = os.environ.get("INVENTAR_DATA") or \
-        QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
-    db = Database(data_dir)
-    w = MainWindow(db)
-    w.show()
-    code = app.exec()
-    db.close()
-    sys.exit(code)
+    base = Path(os.environ.get("INVENTAR_DATA") or
+                QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))
+    base.mkdir(parents=True, exist_ok=True)
+    while run_session(app, base) == "restart":
+        pass
+    sys.exit(0)
 
 
 if __name__ == "__main__":
