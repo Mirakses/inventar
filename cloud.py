@@ -75,13 +75,21 @@ def friendly_error(e):
     if "invalid login credentials" in low:
         return "Неправильний email або пароль."
     if "email not confirmed" in low:
-        return "Email ще не підтверджено — відкрийте лист від Supabase і перейдіть за посиланням."
+        return "Email ще не підтверджено — введіть код із листа."
     if "invite_required" in low or "database error saving new user" in low:
         return "Для цього email немає запрошення. Попросіть адміністратора вас запросити."
     if "already registered" in low or "already been registered" in low:
         return "Користувач з таким email вже зареєстрований — увійдіть."
-    if "password should be" in low or "weak" in low and "password" in low:
+    if "password should be at least" in low or "weak" in low and "password" in low:
         return "Пароль надто простий (мінімум 6 символів)."
+    if "expired" in low or "invalid" in low and ("otp" in low or "token" in low):
+        return "Код неправильний або застарів. Запросіть новий."
+    if "you can only request this after" in low:
+        import re
+        m = re.search(r"after (\d+) second", low)
+        return f"Повторно надіслати можна через {m.group(1)} с." if m else "Зачекайте трохи."
+    if "same_password" in low or "should be different" in low:
+        return "Новий пароль має відрізнятися від старого."
     if "rate limit" in low:
         return "Забагато спроб. Зачекайте кілька хвилин."
     if _is_permission_error(e):
@@ -212,7 +220,27 @@ class Cloud:
 
     @_wrap
     def reset_password(self, email):
+        """Надсилає лист із кодом для зміни пароля."""
         self.client.auth.reset_password_for_email(email.strip().lower())
+
+    @_wrap
+    def resend_signup_code(self, email):
+        self.client.auth.resend({"type": "signup", "email": email.strip().lower()})
+
+    @_wrap
+    def verify_code(self, email, code, kind):
+        """kind: 'signup' — підтвердження реєстрації, 'recovery' — зміна пароля.
+        Успішний код одразу входить у систему."""
+        res = self.client.auth.verify_otp({"email": email.strip().lower(),
+                                           "token": "".join(code.split()), "type": kind})
+        if not res.session:
+            raise CloudError("Код не підійшов")
+        self._save_session(res.session)
+        return True
+
+    @_wrap
+    def set_password(self, password):
+        self.client.auth.update_user({"password": password})
 
     def logout(self):
         try:

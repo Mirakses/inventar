@@ -47,11 +47,24 @@
 
 1. Створіть безкоштовний проєкт на [supabase.com](https://supabase.com)
 2. **SQL Editor** → виконайте [`supabase/schema.sql`](supabase/schema.sql)
-3. **Authentication → Sign In / Providers → Email**: вимкніть *Confirm email* (або підключіть власну пошту SMTP)
+3. Пошта для кодів підтвердження й зміни пароля — див. [«Пошта»](#-пошта-коди-підтвердження) нижче
 4. У програмі: **👤 → Змінити сервер…** → вставте *Project URL* і ключ *anon public* (**не** service_role)
 5. Перший зареєстрований користувач стає адміністратором
 
 Права доступу можна перевірити тестами: `supabase/tests/run.sh` (потрібен локальний Postgres).
+
+## ✉️ Пошта: коди підтвердження
+
+Під час реєстрації й зміни пароля людина отримує на email 6-значний код і вводить його прямо в програмі.
+Вбудована пошта Supabase надсилає листи лише учасникам проєкту, тому потрібна власна SMTP. Найпростіше — Gmail:
+
+1. Google-акаунт → **Безпека** → увімкніть **двоетапну перевірку** → [**Паролі застосунків**](https://myaccount.google.com/apppasswords) → створіть пароль «Supabase»
+2. Supabase → **Authentication → Emails → SMTP Settings** → *Enable custom SMTP*:
+   хост `smtp.gmail.com`, порт `465`, логін і адреса відправника — ваш Gmail, пароль — пароль застосунку
+3. **Authentication → Emails → Templates**:
+   - *Confirm signup* — тема «Код підтвердження — Облік майна», текст із [`supabase/email/confirm_signup.html`](supabase/email/confirm_signup.html)
+   - *Reset password* — тема «Код для зміни пароля — Облік майна», текст із [`supabase/email/reset_password.html`](supabase/email/reset_password.html)
+4. **Authentication → Sign In / Providers → Email** → увімкніть *Confirm email*
 
 ## 🛠 Запуск із коду
 
@@ -90,7 +103,7 @@ ui_cloud.py       вхід, користувачі й запрошення, фо
 cloud.py          робота з Supabase: вхід, права, синхронізація
 db.py             локальна база SQLite (офлайн-копія) і фото
 cloud_config.py   адреса сервера за замовчуванням (публічний ключ)
-supabase/         серверна схема й тести прав доступу
+supabase/         серверна схема, тести прав доступу, шаблони листів
 tests/            тести синхронізації (python -m tests.test_sync)
 assets/           іконка програми
 ```

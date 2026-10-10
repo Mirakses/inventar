@@ -8,7 +8,7 @@ from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QStackedWidget,
     QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
     QWidget)
 
@@ -240,23 +240,62 @@ def _busy(fn):
         QApplication.restoreOverrideCursor()
 
 
+class CodeEdit(QLineEdit):
+    """Поле для коду з листа: лише цифри, великий моноширинний шрифт."""
+
+    def __init__(self):
+        super().__init__()
+        self.setPlaceholderText("000000")
+        self.setMaxLength(10)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet("font-size: 26px; font-weight: 700; letter-spacing: 6px; "
+                           "padding: 10px; font-family: 'Menlo', 'Consolas', monospace;")
+        self.textEdited.connect(self._clean)
+
+    def _clean(self, t):
+        digits = "".join(ch for ch in t if ch.isdigit())
+        if digits != t:
+            self.setText(digits)
+
+
 class LoginDialog(QDialog):
-    """Вхід / реєстрація за запрошенням. result(): 1 — увійшли, 2 — працювати локально."""
+    """Вхід / реєстрація за запрошенням / підтвердження кодом / зміна пароля кодом.
+    result(): 1 — увійшли, 2 — працювати локально."""
     LOCAL = 2
 
     def __init__(self, cloud, parent=None):
         super().__init__(parent)
         self.cloud = cloud
         self.setWindowTitle("Облік майна — вхід")
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(460)
 
         title = QLabel("☁️  Вхід у спільну базу")
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
         sub = QLabel(f"Сервер: {project_ref(cloud.url)}.supabase.co")
         sub.setObjectName("hint")
 
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._page_main())      # 0
+        self.pages.addWidget(self._page_confirm())   # 1
+        self.pages.addWidget(self._page_reset())     # 2
+
+        self.msg = QLabel()
+        self.msg.setWordWrap(True)
+        self.msg.hide()
+        self.b_local = QPushButton("Працювати без хмари (локально)")
+        self.b_local.clicked.connect(lambda: self.done(self.LOCAL))
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(title)
+        lay.addWidget(sub)
+        lay.addSpacing(6)
+        lay.addWidget(self.pages)
+        lay.addWidget(self.msg)
+        lay.addWidget(self.b_local, 0, Qt.AlignLeft)
+
+    # ---------- сторінки
+    def _page_main(self):
         tabs = QTabWidget()
-        # --- вхід
         w1 = QWidget()
         f1 = QFormLayout(w1)
         self.email = QLineEdit()
@@ -269,7 +308,7 @@ class LoginDialog(QDialog):
         b_login.clicked.connect(self.do_login)
         b_forgot = QPushButton("Забули пароль?")
         b_forgot.setFlat(True)
-        b_forgot.clicked.connect(self.do_forgot)
+        b_forgot.clicked.connect(self.open_reset)
         f1.addRow("Email", self.email)
         f1.addRow("Пароль", self.pw)
         row = QHBoxLayout()
@@ -278,11 +317,11 @@ class LoginDialog(QDialog):
         row.addWidget(b_login)
         f1.addRow(row)
         tabs.addTab(w1, "Вхід")
-        # --- реєстрація
+
         w2 = QWidget()
         f2 = QFormLayout(w2)
-        hint = QLabel("Зареєструватися можна лише на email, на який адміністратор надіслав "
-                      "запрошення. Перший користувач нової бази стає адміністратором.")
+        hint = QLabel("Зареєструватися можна лише на email, для якого адміністратор створив "
+                      "запрошення. На пошту прийде код підтвердження.")
         hint.setWordWrap(True)
         hint.setObjectName("hint")
         self.r_name = QLineEdit()
@@ -301,21 +340,87 @@ class LoginDialog(QDialog):
         f2.addRow("Ще раз", self.r_pw2)
         f2.addRow(b_reg)
         tabs.addTab(w2, "Реєстрація за запрошенням")
+        self.tabs = tabs
+        return tabs
 
-        self.msg = QLabel()
-        self.msg.setWordWrap(True)
-        self.msg.hide()
-        b_local = QPushButton("Працювати без хмари (локально)")
-        b_local.clicked.connect(lambda: self.done(self.LOCAL))
+    def _page_confirm(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        head = QLabel("✉️  Підтвердіть email")
+        head.setStyleSheet("font-size: 16px; font-weight: 700;")
+        self.c_info = QLabel()
+        self.c_info.setWordWrap(True)
+        self.c_code = CodeEdit()
+        self.c_code.returnPressed.connect(self.do_confirm)
+        b_ok = QPushButton("Підтвердити")
+        b_ok.setObjectName("primary")
+        b_ok.clicked.connect(self.do_confirm)
+        b_again = QPushButton("Надіслати код ще раз")
+        b_again.clicked.connect(self.do_resend)
+        b_back = QPushButton("← Назад")
+        b_back.setFlat(True)
+        b_back.clicked.connect(self.back)
+        row = QHBoxLayout()
+        row.addWidget(b_back)
+        row.addStretch()
+        row.addWidget(b_again)
+        row.addWidget(b_ok)
+        v.addWidget(head)
+        v.addWidget(self.c_info)
+        v.addWidget(self.c_code)
+        v.addStretch()
+        v.addLayout(row)
+        return w
 
-        lay = QVBoxLayout(self)
-        lay.addWidget(title)
-        lay.addWidget(sub)
-        lay.addSpacing(6)
-        lay.addWidget(tabs)
-        lay.addWidget(self.msg)
-        lay.addWidget(b_local, 0, Qt.AlignLeft)
+    def _page_reset(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        head = QLabel("🔑  Зміна пароля")
+        head.setStyleSheet("font-size: 16px; font-weight: 700;")
+        step1 = QLabel("1. Вкажіть email — надішлемо код.")
+        self.x_email = QLineEdit()
+        self.x_email.setPlaceholderText("you@example.com")
+        self.x_send = QPushButton("Надіслати код")
+        self.x_send.clicked.connect(self.do_send_reset)
+        r1 = QHBoxLayout()
+        r1.addWidget(self.x_email, 1)
+        r1.addWidget(self.x_send)
+        step2 = QLabel("2. Введіть код із листа і новий пароль.")
+        self.x_code = CodeEdit()
+        self.x_pw = QLineEdit()
+        self.x_pw.setEchoMode(QLineEdit.Password)
+        self.x_pw.setPlaceholderText("новий пароль (мінімум 6 символів)")
+        self.x_pw2 = QLineEdit()
+        self.x_pw2.setEchoMode(QLineEdit.Password)
+        self.x_pw2.setPlaceholderText("ще раз")
+        self.x_pw2.returnPressed.connect(self.do_reset)
+        b_ok = QPushButton("Змінити пароль і увійти")
+        b_ok.setObjectName("primary")
+        b_ok.clicked.connect(self.do_reset)
+        b_back = QPushButton("← Назад")
+        b_back.setFlat(True)
+        b_back.clicked.connect(self.back)
+        row = QHBoxLayout()
+        row.addWidget(b_back)
+        row.addStretch()
+        row.addWidget(b_ok)
+        self.step2 = [step2, self.x_code, self.x_pw, self.x_pw2, b_ok]
+        for x in (head, step1):
+            v.addWidget(x)
+        v.addLayout(r1)
+        v.addSpacing(8)
+        for x in (step2, self.x_code, self.x_pw, self.x_pw2):
+            v.addWidget(x)
+        v.addStretch()
+        v.addLayout(row)
+        self._step2(False)
+        return w
 
+    def _step2(self, on):
+        for x in self.step2:
+            x.setEnabled(on)
+
+    # ---------- службове
     def show_msg(self, text, ok=False):
         color = ("#166534", "#DCFCE7") if ok else ("#991B1B", "#FEE2E2")
         self.msg.setStyleSheet(f"color:{color[0]}; background:{color[1]}; padding:8px 10px; "
@@ -323,6 +428,37 @@ class LoginDialog(QDialog):
         self.msg.setText(text)
         self.msg.show()
 
+    def back(self):
+        self.msg.hide()
+        self.pages.setCurrentIndex(0)
+        self.b_local.show()
+
+    def open_confirm(self, email, sent=True):
+        self.pending_email = email.strip().lower()
+        self.c_info.setText(
+            f"Ми надіслали код на <b>{html.escape(self.pending_email)}</b>. Введіть його нижче. "
+            "Лист не прийшов? Перевірте «Спам» або натисніть «Надіслати код ще раз»."
+            if sent else
+            f"Email <b>{html.escape(self.pending_email)}</b> ще не підтверджено. "
+            "Натисніть «Надіслати код ще раз» і введіть код із листа.")
+        self.c_code.clear()
+        self.msg.hide()
+        self.b_local.hide()
+        self.pages.setCurrentIndex(1)
+        self.c_code.setFocus()
+
+    def open_reset(self):
+        self.x_email.setText(self.email.text())
+        self.x_code.clear()
+        self.x_pw.clear()
+        self.x_pw2.clear()
+        self._step2(False)
+        self.msg.hide()
+        self.b_local.hide()
+        self.pages.setCurrentIndex(2)
+        self.x_email.setFocus()
+
+    # ---------- дії
     def do_login(self):
         if not self.email.text().strip() or not self.pw.text():
             self.show_msg("Введіть email і пароль.")
@@ -330,19 +466,12 @@ class LoginDialog(QDialog):
         try:
             _busy(lambda: self.cloud.login(self.email.text(), self.pw.text()))
         except Exception as e:  # noqa: BLE001
+            if "not confirmed" in str(e).lower():
+                self.open_confirm(self.email.text(), sent=False)
+                return
             self.show_msg(friendly_error(e))
             return
         self.accept()
-
-    def do_forgot(self):
-        if not self.email.text().strip():
-            self.show_msg("Введіть email у поле вище, і ми надішлемо посилання для зміни пароля.")
-            return
-        try:
-            _busy(lambda: self.cloud.reset_password(self.email.text()))
-            self.show_msg("Лист для зміни пароля надіслано (перевірте й «Спам»).", ok=True)
-        except Exception as e:  # noqa: BLE001
-            self.show_msg(friendly_error(e))
 
     def do_signup(self):
         if not self.r_email.text().strip() or not self.r_pw.text():
@@ -364,7 +493,59 @@ class LoginDialog(QDialog):
             self.accept()
         else:
             self.email.setText(self.r_email.text())
-            self.show_msg("Готово! Підтвердьте email за посиланням у листі, потім увійдіть.", ok=True)
+            self.open_confirm(self.r_email.text())
+
+    def do_confirm(self):
+        if len(self.c_code.text()) < 6:
+            self.show_msg("Введіть код із листа.")
+            return
+        try:
+            _busy(lambda: self.cloud.verify_code(self.pending_email, self.c_code.text(), "signup"))
+        except Exception as e:  # noqa: BLE001
+            self.show_msg(friendly_error(e))
+            return
+        self.accept()
+
+    def do_resend(self):
+        try:
+            _busy(lambda: self.cloud.resend_signup_code(self.pending_email))
+            self.show_msg("Новий код надіслано.", ok=True)
+        except Exception as e:  # noqa: BLE001
+            self.show_msg(friendly_error(e))
+
+    def do_send_reset(self):
+        email = self.x_email.text().strip()
+        if "@" not in email:
+            self.show_msg("Вкажіть email.")
+            return
+        try:
+            _busy(lambda: self.cloud.reset_password(email))
+        except Exception as e:  # noqa: BLE001
+            self.show_msg(friendly_error(e))
+            return
+        self.show_msg("Якщо такий користувач є, код уже в пошті (перевірте й «Спам»).", ok=True)
+        self.x_send.setText("Надіслати ще раз")
+        self._step2(True)
+        self.x_code.setFocus()
+
+    def do_reset(self):
+        if len(self.x_code.text()) < 6:
+            self.show_msg("Введіть код із листа.")
+            return
+        if len(self.x_pw.text()) < 6:
+            self.show_msg("Пароль має бути не коротшим за 6 символів.")
+            return
+        if self.x_pw.text() != self.x_pw2.text():
+            self.show_msg("Паролі не збігаються.")
+            return
+        try:
+            _busy(lambda: self.cloud.verify_code(self.x_email.text(), self.x_code.text(), "recovery"))
+            _busy(lambda: self.cloud.set_password(self.x_pw.text()))
+        except Exception as e:  # noqa: BLE001
+            self.show_msg(friendly_error(e))
+            return
+        QMessageBox.information(self, "Пароль", "Пароль змінено. Ви увійшли в систему.")
+        self.accept()
 
 
 class ConnectDialog(QDialog):
