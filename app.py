@@ -23,7 +23,7 @@ from cloud import ROLES, Cloud, Offline, Rejected, friendly_error
 from ui_cloud import (ConnectDialog, LoginDialog, Perm, SyncController, UsersDialog,
                       cloud_dir, history_html, load_config, save_config)
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 APP_NAME = "Облік майна"
 STATUSES = ["В користуванні", "На складі", "У ремонті", "Позичено", "Списано"]
 
