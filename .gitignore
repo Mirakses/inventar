@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Збірка PyInstaller
+build/
+dist/
+*.spec
+
+# Дані програми (якщо запускати з INVENTAR_DATA усередині проєкту)
+*.db
+data/
+photos/
+
+# Тестові знімки
+screenshots/
+
+# Системне
+.DS_Store
+Thumbs.db

@@ -1,1 +1,72 @@
-# inventar
+# 📦 Облік майна
+
+Десктопна програма для обліку речей: категорії й підкатегорії, довільні характеристики, фото, пошук і сортування.
+Працює на **Windows, macOS і Linux** (Python + PySide6/Qt). Усі дані зберігаються локально в SQLite.
+
+[![Збірка](https://github.com/Mirakses/inventar/actions/workflows/build.yml/badge.svg)](https://github.com/Mirakses/inventar/actions/workflows/build.yml)
+
+## ⬇️ Завантажити
+
+Готові версії лежать на сторінці [**Releases**](https://github.com/Mirakses/inventar/releases):
+
+| Система | Файл | Як запустити |
+|---|---|---|
+| Windows | `Inventar-Windows.zip` | Розпакуйте й запустіть `Inventar.exe`. Якщо SmartScreen попередить, натисніть «Докладніше → Усе одно запустити». |
+| macOS | `Inventar-macOS.zip` | Розпакуйте й перетягніть `Inventar.app` у «Програми». Під час першого запуску: правий клік → «Відкрити». |
+
+## ✨ Можливості
+
+- **Дерево категорій** з підкатегоріями та кольоровими мітками (правий клік — додати, перейменувати, перемістити, видалити)
+- **Картка речі**: назва, категорія, інвентарний і серійний номер, розташування, кількість, ціна, дата покупки, стан, примітки
+- **Характеристики** у вигляді пар «параметр — значення». Параметри, які вже є в категорії, підставляються автоматично
+- **Фото**: кілька на кожну річ, додаються перетягуванням. Для речей без фото показується кольорова аватарка
+- **Пошук** без урахування регістру по всіх полях і характеристиках
+- **Сортування** будь-якої колонки. Правий клік по заголовку таблиці показує або ховає колонки
+- **Експорт у CSV** (для Excel) і **резервна копія** в один ZIP (база + усі фото)
+
+Гарячі клавіші: `Ctrl+N` — додати, `Ctrl+E` — редагувати, `Ctrl+D` — копія, `Del` — видалити, `Ctrl+F` — пошук.
+
+## 🛠 Запуск із коду
+
+```bash
+git clone https://github.com/Mirakses/inventar.git
+cd inventar
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python app.py
+```
+
+Збірка виконуваного файлу на своєму комп'ютері:
+
+```bash
+pip install pyinstaller
+pyinstaller --windowed --name Inventar app.py
+```
+
+## 💾 Де зберігаються дані
+
+| Система | Папка |
+|---|---|
+| Windows | `%APPDATA%\Inventar` |
+| macOS | `~/Library/Application Support/Inventar` |
+| Linux | `~/.local/share/Inventar` |
+
+Іншу папку можна задати змінною середовища `INVENTAR_DATA`. Кнопка «Папка даних» у програмі відкриває поточну.
+
+## 📁 Структура
+
+```
+app.py            інтерфейс (PySide6)
+db.py             база даних SQLite і робота з фото
+.github/workflows автоматична збірка для Windows і macOS
+```
+
+## 🚀 Випуск нової версії
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+GitHub Actions збере програму для обох систем і створить Release із файлами.
