@@ -24,6 +24,8 @@ jobs:
           - os: macos-latest
             artifact: Inventar-macOS
     runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"          # кирилиця в консолі Windows
 
     steps:
       - uses: actions/checkout@v4
