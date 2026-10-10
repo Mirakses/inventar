@@ -1608,7 +1608,19 @@ def run_session(app, base):
     return w.next_action
 
 
+def selftest():
+    """Перевірка зібраної програми: усі бібліотеки на місці (для CI)."""
+    from supabase import ClientOptions, create_client
+    create_client("https://example.supabase.co", "x.y.z",
+                  options=ClientOptions(auto_refresh_token=False, persist_session=False))
+    import cloud_config  # noqa: F401
+    print("selftest ok", __version__)
+    return 0
+
+
 def main():
+    if "--selftest" in sys.argv:
+        sys.exit(selftest())
     app = QApplication(sys.argv)
     app.setApplicationName("Inventar")
     app.setApplicationVersion(__version__)

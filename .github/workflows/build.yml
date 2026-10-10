@@ -39,18 +39,24 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Перевірка синтаксису
-        run: python -m py_compile app.py db.py
+        run: python -m py_compile app.py db.py cloud.py ui_cloud.py cloud_config.py
+
+      - name: Тести синхронізації
+        run: python -m tests.test_sync
 
       - name: Зібрати (Windows)
         if: runner.os == 'Windows'
         run: |
-          pyinstaller --noconfirm --windowed --onefile --name Inventar --icon assets/icon.ico --add-data "assets/icon.png:assets" app.py
+          pyinstaller --noconfirm --windowed --onefile --name Inventar --icon assets/icon.ico --add-data "assets/icon.png:assets" --collect-submodules supabase app.py
+          $p = Start-Process dist/Inventar.exe -ArgumentList "--selftest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "selftest failed: $($p.ExitCode)" }
           Compress-Archive -Path dist/Inventar.exe -DestinationPath ${{ matrix.artifact }}.zip
 
       - name: Зібрати (macOS)
         if: runner.os == 'macOS'
         run: |
-          pyinstaller --noconfirm --windowed --name Inventar --icon assets/icon.icns --add-data "assets/icon.png:assets" app.py
+          pyinstaller --noconfirm --windowed --name Inventar --icon assets/icon.icns --add-data "assets/icon.png:assets" --collect-submodules supabase app.py
+          dist/Inventar.app/Contents/MacOS/Inventar --selftest
           ditto -c -k --keepParent dist/Inventar.app ${{ matrix.artifact }}.zip
 
       - uses: actions/upload-artifact@v4
